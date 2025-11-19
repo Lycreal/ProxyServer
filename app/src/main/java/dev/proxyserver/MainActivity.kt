@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.os.Bundle
 import android.widget.TextView
 import androidx.activity.ComponentActivity
+import java.time.ZonedDateTime
 
 
 class MainActivity : ComponentActivity() {
@@ -23,7 +24,10 @@ class MainActivity : ComponentActivity() {
             )
         ) {
             runOnUiThread {
-                logTextView.text = "$it\n${logTextView.text}".take(65535)
+                val timeString = ZonedDateTime.now().format(
+                    java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+                )
+                logTextView.text = "[${timeString}] $it\n${logTextView.text}".take(65535)
             }
         }
         service.start()
