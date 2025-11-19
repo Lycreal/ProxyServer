@@ -1,6 +1,8 @@
 package dev.proxyserver
 
 import android.net.LocalServerSocket
+import android.system.Os
+import android.system.OsConstants
 import kotlinx.coroutines.*
 import java.io.InputStream
 import java.io.OutputStream
@@ -10,10 +12,10 @@ import java.nio.ByteBuffer
 import java.util.concurrent.CountDownLatch
 
 data class Config(
-    val listenType: String,
-    val listenPort: Int,
-    val listenUnixSocket: String,
-    val allowIPv6: Boolean
+    var listenType: String,
+    var listenPort: Int,
+    var listenUnixSocket: String,
+    var allowIPv6: Boolean
 )
 
 class Socks5Service(val config: Config, val logger: (String) -> Unit) {
@@ -45,45 +47,77 @@ class Socks5Service(val config: Config, val logger: (String) -> Unit) {
     }
 
     private val scope = CoroutineScope(Dispatchers.IO)
+    private var worker: Job? = null
+    private var serverSocket: Any? = null
+
+    var onStopped: (() -> Unit)? = null
 
     fun start() {
-        scope.launch {
-            if (config.listenType == "port") {
-                startPort(config.listenPort)
-            } else {
-                startUnixSocket(config.listenUnixSocket)
-            }
+        if (config.listenType == "port") {
+            startPort(config.listenPort)
+        } else {
+            startUnixSocket(config.listenUnixSocket)
         }
         logger("service started")
+
+        scope.launch {
+            joinAll(worker!!)
+            onStopped?.invoke()
+        }
+    }
+
+    fun stop() {
+        logger("stopping service")
+        worker!!.cancel()
+        when (serverSocket) {
+            is ServerSocket -> {
+                (serverSocket as ServerSocket).close()
+            }
+
+            is LocalServerSocket -> {
+                Os.shutdown((serverSocket as LocalServerSocket).fileDescriptor, OsConstants.SHUT_RDWR)
+                (serverSocket as LocalServerSocket).close()
+            }
+        }
     }
 
     fun startPort(port: Int) {
-        val serverSocket = ServerSocket(port)
+        serverSocket = ServerSocket(port)
+        val serverSocket = serverSocket as ServerSocket
         logger("listening on :${serverSocket.localPort}")
-        while (true) {
-            val clientSocket = serverSocket.accept()
-            val remoteAddress = clientSocket.remoteSocketAddress.toString().removePrefix("/")
-            scope.launch {
-                clientSocket.use {
-                    val input = it.inputStream
-                    val output = it.outputStream
-                    handleConnection(input, output, remoteAddress)
+        worker = scope.launch {
+            while (isActive) {
+                val clientSocket = runCatching { serverSocket.accept() }.getOrNull()
+                if (clientSocket == null) {
+                    continue
+                }
+                scope.launch {
+                    clientSocket.use {
+                        val input = it.inputStream
+                        val output = it.outputStream
+                        handleConnection(input, output, clientSocket.remoteSocketAddress.toString().removePrefix("/"))
+                    }
                 }
             }
         }
     }
 
     fun startUnixSocket(name: String) {
-        val serverSocket = LocalServerSocket(name)
+        serverSocket = LocalServerSocket(name)
+        val serverSocket = serverSocket as LocalServerSocket
         logger("listening on @${serverSocket.localSocketAddress.name}")
-        while (true) {
-            val clientSocket = serverSocket.accept()
-            val remoteAddress = "@$name"
-            scope.launch {
-                clientSocket.use {
-                    val input = it.inputStream
-                    val output = it.outputStream
-                    handleConnection(input, output, remoteAddress)
+        worker = scope.launch {
+            while (isActive) {
+                val clientSocket = runCatching { serverSocket.accept() }.getOrNull()
+                if (clientSocket == null) {
+                    continue
+                }
+                scope.launch {
+                    clientSocket.use {
+                        val input = it.inputStream
+                        val output = it.outputStream
+                        handleConnection(input, output, "@$name")
+                    }
                 }
             }
         }
