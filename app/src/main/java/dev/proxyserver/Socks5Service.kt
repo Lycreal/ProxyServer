@@ -1,15 +1,12 @@
 package dev.proxyserver
 
 import android.net.LocalServerSocket
-import android.system.Os
-import android.system.OsConstants
 import kotlinx.coroutines.*
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.ServerSocket
 import java.net.Socket
 import java.nio.ByteBuffer
-import java.util.concurrent.CountDownLatch
 
 data class Config(
     var listenType: String,
@@ -47,88 +44,49 @@ class Socks5Service(val config: Config, val logger: (String) -> Unit) {
     }
 
     private val scope = CoroutineScope(Dispatchers.IO)
-    private var worker: Job? = null
-    private var serverSocket: Any? = null
+
+    private val serverSocket: MyServerSocket =
+        if (config.listenType == "port") {
+            MyServerSocketFactory.wrap(ServerSocket(config.listenPort))
+        } else {
+            MyServerSocketFactory.wrap(LocalServerSocket(config.listenUnixSocket))
+        }
 
     var onStopped: (() -> Unit)? = null
 
     fun start() {
         if (config.listenType == "port") {
-            startPort(config.listenPort)
+            logger("listening on :${config.listenPort}")
         } else {
-            startUnixSocket(config.listenUnixSocket)
+            logger("listening on @${config.listenUnixSocket}")
         }
-        logger("service started")
-
         scope.launch {
-            joinAll(worker!!)
+            while (isActive) {
+                val clientSocket = runCatching { serverSocket.accept() }.getOrNull()
+                if (clientSocket == null) {
+                    break
+                }
+                scope.launch {
+                    clientSocket.use {
+                        handleConnection(clientSocket)
+                    }
+                }
+            }
+            logger("service stopped")
             onStopped?.invoke()
         }
+        logger("service started")
     }
 
     fun stop() {
-        logger("stopping service")
-        worker!!.cancel()
-        when (serverSocket) {
-            is ServerSocket -> {
-                (serverSocket as ServerSocket).close()
-            }
-
-            is LocalServerSocket -> {
-                Os.shutdown((serverSocket as LocalServerSocket).fileDescriptor, OsConstants.SHUT_RDWR)
-                (serverSocket as LocalServerSocket).close()
-            }
-        }
+        serverSocket.close()
     }
 
-    fun startPort(port: Int) {
-        serverSocket = ServerSocket(port)
-        val serverSocket = serverSocket as ServerSocket
-        logger("listening on :${serverSocket.localPort}")
-        worker = scope.launch {
-            while (isActive) {
-                val clientSocket = runCatching { serverSocket.accept() }.getOrNull()
-                if (clientSocket == null) {
-                    continue
-                }
-                scope.launch {
-                    clientSocket.use {
-                        val input = it.inputStream
-                        val output = it.outputStream
-                        handleConnection(input, output, clientSocket.remoteSocketAddress.toString().removePrefix("/"))
-                    }
-                }
-            }
-        }
-    }
-
-    fun startUnixSocket(name: String) {
-        serverSocket = LocalServerSocket(name)
-        val serverSocket = serverSocket as LocalServerSocket
-        logger("listening on @${serverSocket.localSocketAddress.name}")
-        worker = scope.launch {
-            while (isActive) {
-                val clientSocket = runCatching { serverSocket.accept() }.getOrNull()
-                if (clientSocket == null) {
-                    continue
-                }
-                scope.launch {
-                    clientSocket.use {
-                        val input = it.inputStream
-                        val output = it.outputStream
-                        handleConnection(input, output, "@$name")
-                    }
-                }
-            }
-        }
-    }
-
-    private fun handleConnection(
-        input: InputStream,
-        output: OutputStream,
-        remoteAddress: String
-    ) {
+    private suspend fun handleConnection(clientSocket: ClientSocket) {
         // https://www.rfc-editor.org/rfc/rfc1928
+        val input = clientSocket.inputStream
+        val output = clientSocket.outputStream
+        val remoteAddress = clientSocket.remoteAddress
 
         val (atyp, target, port) = runCatching {
             // 1. 协议版本协商
@@ -138,7 +96,7 @@ class Socks5Service(val config: Config, val logger: (String) -> Unit) {
         }.fold(
             onSuccess = { it },
             onFailure = {
-                logger(it.toString())
+                logger("$remoteAddress $it")
                 return
             }
         )
@@ -184,8 +142,13 @@ class Socks5Service(val config: Config, val logger: (String) -> Unit) {
         )
         // 4. 流量转发
         targetSocket.use {
-            handleStream(input, output, it)
+            val targetSocket = ClientSocketFactory.wrap(targetSocket)
+            joinAll(
+                scope.launch { handleStreamOneSide(clientSocket, targetSocket) },
+                scope.launch { handleStreamOneSide(targetSocket, clientSocket) }
+            )
         }
+        logger("$remoteAddress -/-> $target:$port")
     }
 
     private fun handleSocks(input: InputStream, output: OutputStream) {
@@ -245,36 +208,17 @@ class Socks5Service(val config: Config, val logger: (String) -> Unit) {
         return Triple(atyp, address, port)
     }
 
-    private fun handleStream(
-        sourceInput: InputStream,
-        sourceOutput: OutputStream,
-        targetSocket: Socket
-    ) {
-        val latch = CountDownLatch(1)
-        scope.launch {
-            try {
-                targetSocket.inputStream.copyTo(sourceOutput)
-            } catch (e: Exception) {
-                when (e) {
-                    is java.net.SocketException if e.message == "Socket closed" -> {}
-                    else -> logger(e.toString())
-                }
-            } finally {
-                latch.countDown()
-            }
+    private fun handleStreamOneSide(from: ClientSocket, to: ClientSocket) {
+        try {
+            from.inputStream.copyTo(to.outputStream)
+        } catch (e: Exception) {
+            logger(e.stackTraceToString())
         }
-        scope.launch {
-            try {
-                sourceInput.copyTo(targetSocket.outputStream)
-            } catch (e: Exception) {
-                when (e) {
-                    is java.net.SocketException if e.message == "Socket closed" -> {}
-                    else -> logger(e.toString())
-                }
-            } finally {
-                latch.countDown()
-            }
+        try {
+            to.shutdownOutput()
+        } catch (e: Exception) {
+            logger(e.stackTraceToString())
         }
-        latch.await()
+        return
     }
 }
