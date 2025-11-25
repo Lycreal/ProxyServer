@@ -114,8 +114,8 @@ class MainActivity : ComponentActivity() {
 
         listenTypeSpinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
             override fun onItemSelected(
-                parent: android.widget.AdapterView<*>,
-                view: android.view.View,
+                parent: android.widget.AdapterView<*>?,
+                view: android.view.View?,
                 position: Int,
                 id: Long
             ) {
@@ -129,7 +129,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            override fun onNothingSelected(parent: android.widget.AdapterView<*>) {}
+            override fun onNothingSelected(parent: android.widget.AdapterView<*>?) {}
         }
 
     }

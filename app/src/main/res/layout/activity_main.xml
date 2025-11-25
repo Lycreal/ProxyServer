@@ -20,8 +20,7 @@
         <NumberPicker
             android:id="@+id/portNumberPicker"
             android:layout_width="250dp"
-            android:layout_height="50dp"
-            />
+            android:layout_height="50dp" />
 
         <EditText
             android:id="@+id/socketNameEditText"

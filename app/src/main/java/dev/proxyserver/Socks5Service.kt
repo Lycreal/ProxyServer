@@ -2,11 +2,14 @@ package dev.proxyserver
 
 import android.net.LocalServerSocket
 import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.Channel
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.ServerSocket
 import java.net.Socket
 import java.nio.ByteBuffer
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
 
 data class Config(
     var listenType: String,
@@ -44,6 +47,8 @@ class Socks5Service(val config: Config, val logger: (String) -> Unit) {
     }
 
     private val scope = CoroutineScope(Dispatchers.IO)
+
+    val maxIdleTimeout: Duration = 30.seconds
 
     private val serverSocket: MyServerSocket =
         if (config.listenType == "port") {
@@ -142,11 +147,17 @@ class Socks5Service(val config: Config, val logger: (String) -> Unit) {
         )
         // 4. 流量转发
         targetSocket.use {
+            val aliveChannel = Channel<Unit>(1)
             val targetSocket = ClientSocketFactory.wrap(targetSocket)
-            joinAll(
-                scope.launch { handleStreamOneSide(clientSocket, targetSocket) },
-                scope.launch { handleStreamOneSide(targetSocket, clientSocket) }
-            )
+            val job1 = scope.launch { handleStreamOneSide(clientSocket, targetSocket, aliveChannel) }
+            val job2 = scope.launch { handleStreamOneSide(targetSocket, clientSocket, aliveChannel) }
+            while (job1.isActive || job2.isActive) {
+                if (withTimeoutOrNull(maxIdleTimeout) { aliveChannel.receive() } == null) {
+                    logger("$remoteAddress connection timeout")
+                    break
+                }
+            }
+            aliveChannel.close()
         }
         logger("$remoteAddress -/-> $target:$port")
     }
@@ -208,16 +219,28 @@ class Socks5Service(val config: Config, val logger: (String) -> Unit) {
         return Triple(atyp, address, port)
     }
 
-    private fun handleStreamOneSide(from: ClientSocket, to: ClientSocket) {
+    private suspend fun handleStreamOneSide(from: ClientSocket, to: ClientSocket, aliveChannel: Channel<Unit>) {
         try {
-            from.inputStream.copyTo(to.outputStream)
+            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+            var bytes = from.inputStream.read(buffer)
+            while (bytes >= 0) {
+                to.outputStream.write(buffer, 0, bytes)
+                bytes = from.inputStream.read(buffer)
+                aliveChannel.send(Unit)
+            }
         } catch (e: Exception) {
-            logger(e.stackTraceToString())
+            when (e) {
+                is java.net.SocketException if e.message == "Socket closed" -> return
+                else -> logger(e.stackTraceToString())
+            }
         }
         try {
             to.shutdownOutput()
         } catch (e: Exception) {
-            logger(e.stackTraceToString())
+            when (e) {
+                is java.net.SocketException if e.message == "Socket closed" -> return
+                else -> logger(e.stackTraceToString())
+            }
         }
         return
     }
