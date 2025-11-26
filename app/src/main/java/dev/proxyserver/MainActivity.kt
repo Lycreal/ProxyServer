@@ -15,9 +15,8 @@ class MainActivity : ComponentActivity() {
         listenType = "port",
         listenPort = 9000,
         listenUnixSocket = "ProxyServer",
-        allowIPv6 = true
     )
-    var service: Socks5Service? = null
+    var service: Socks5Server? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -54,7 +53,7 @@ class MainActivity : ComponentActivity() {
         val logTextView = findViewById<TextView>(R.id.logTextView)
 
         startButton.setOnClickListener {
-            service = Socks5Service(config).apply {
+            service = Socks5Server(config).apply {
                 onStarted = {
                     runOnUiThread {
                         findViewById<android.widget.Spinner>(R.id.listenTypeSpinner).isEnabled = false
