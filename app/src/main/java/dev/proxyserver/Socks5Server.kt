@@ -203,7 +203,7 @@ class Socks5Server(val config: Config) {
         )
         // 4. 流量转发
         targetSocket.use {
-            val aliveChannel = Channel<Unit>(1)
+            val aliveChannel = Channel<Unit>(Channel.CONFLATED)
             val targetSocket = ClientSocketFactory.wrap(targetSocket)
             val job1 = scope.launch { handleStreamOneSide(clientSocket, targetSocket, aliveChannel) }
             val job2 = scope.launch { handleStreamOneSide(targetSocket, clientSocket, aliveChannel) }
@@ -253,27 +253,30 @@ class Socks5Server(val config: Config) {
         return address to port
     }
 
-    private suspend fun handleStreamOneSide(from: ClientSocket, to: ClientSocket, aliveChannel: Channel<Unit>) {
+    private fun handleStreamOneSide(from: ClientSocket, to: ClientSocket, aliveChannel: Channel<Unit>) {
         try {
             val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
             var bytes = from.inputStream.read(buffer)
             while (bytes >= 0) {
                 to.outputStream.write(buffer, 0, bytes)
                 bytes = from.inputStream.read(buffer)
-                aliveChannel.send(Unit)
+                aliveChannel.trySend(Unit)
             }
         } catch (e: Exception) {
             when (e) {
                 is java.net.SocketException if e.message == "Socket closed" -> {}
-                else -> logger(e.stackTraceToString())
+                else -> logger("Error:" + e.message.toString())
             }
         }
         try {
-            to.shutdownOutput()
+            if (!to.isClosed) {
+                to.shutdownOutput()
+            }
         } catch (e: Exception) {
             when (e) {
-                is java.net.SocketException if e.message == "Socket closed" -> {}
-                else -> logger(e.stackTraceToString())
+                is java.net.SocketException if e.message == "Socket is closed" -> {}
+                is java.io.IOException if e.message == "socket not created" -> {}
+                else -> logger("Error:" + e.message.toString())
             }
         }
         return

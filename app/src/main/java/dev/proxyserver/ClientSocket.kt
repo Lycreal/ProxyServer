@@ -1,6 +1,8 @@
 package dev.proxyserver
 
 import android.net.LocalSocket
+import android.system.Os
+import android.system.OsConstants
 import java.io.Closeable
 import java.io.InputStream
 import java.io.OutputStream
@@ -12,6 +14,7 @@ interface ClientSocket : Closeable {
     val inputStream: InputStream
     val outputStream: OutputStream
     val remoteAddress: Any
+    val isClosed: Boolean
 
     @Throws(java.io.IOException::class)
     fun shutdownOutput()
@@ -31,6 +34,8 @@ private class SocketWrapper(val wrapped: Socket) : ClientSocket {
         get() = wrapped.outputStream
     override val remoteAddress: SocketAddress
         get() = wrapped.remoteSocketAddress
+    override val isClosed: Boolean
+        get() = wrapped.isClosed
 
     override fun close() = wrapped.close()
     override fun shutdownOutput() = wrapped.shutdownOutput()
@@ -43,7 +48,13 @@ private class LocalSocketWrapper(val wrapped: LocalSocket) : ClientSocket {
         get() = wrapped.outputStream
     override val remoteAddress: Any
         get() = wrapped.fileDescriptor
+    override val isClosed: Boolean
+        get() = wrapped.fileDescriptor == null
 
-    override fun close() = wrapped.close()
+    override fun close() {
+        Os.shutdown(wrapped.fileDescriptor, OsConstants.SHUT_RDWR)
+        wrapped.close()
+    }
+
     override fun shutdownOutput() = wrapped.shutdownOutput()
 }
