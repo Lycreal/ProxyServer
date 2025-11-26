@@ -15,10 +15,11 @@ data class Config(
     var listenType: String,
     var listenPort: Int,
     var listenUnixSocket: String,
-    var allowIPv6: Boolean
+    var allowIPv6: Boolean,
+    var maxIdleTimeout: Duration = 30.seconds
 )
 
-class Socks5Service(val config: Config, val logger: (String) -> Unit) {
+class Socks5Service(val config: Config) {
     companion object {
         const val VER: Byte = 0x05
 
@@ -48,40 +49,44 @@ class Socks5Service(val config: Config, val logger: (String) -> Unit) {
 
     private val scope = CoroutineScope(Dispatchers.IO)
 
-    val maxIdleTimeout: Duration = 30.seconds
+    private lateinit var serverSocket: MyServerSocket
 
-    private val serverSocket: MyServerSocket =
-        if (config.listenType == "port") {
-            MyServerSocketFactory.wrap(ServerSocket(config.listenPort))
-        } else {
-            MyServerSocketFactory.wrap(LocalServerSocket(config.listenUnixSocket))
-        }
-
+    var onStarted: (() -> Unit)? = null
     var onStopped: (() -> Unit)? = null
+    var logger: (String) -> Unit = {}
 
     fun start() {
         if (config.listenType == "port") {
+            serverSocket = MyServerSocketFactory.wrap(ServerSocket(config.listenPort))
             logger("listening on :${config.listenPort}")
         } else {
+            serverSocket = MyServerSocketFactory.wrap(LocalServerSocket(config.listenUnixSocket))
             logger("listening on @${config.listenUnixSocket}")
         }
+        logger("service started")
+        onStarted?.invoke()
+
         scope.launch {
-            while (isActive) {
-                val clientSocket = runCatching { serverSocket.accept() }.getOrNull()
-                if (clientSocket == null) {
-                    break
-                }
-                scope.launch {
-                    clientSocket.use {
-                        handleConnection(clientSocket)
-                    }
+            listenUntilStopped()
+        }
+    }
+
+    fun listenUntilStopped() {
+        while (true) {
+            val clientSocket = runCatching { serverSocket.accept() }.getOrNull()
+            if (clientSocket == null) {
+                break
+            }
+            scope.launch {
+                clientSocket.use {
+                    handleConnection(clientSocket)
                 }
             }
-            logger("service stopped")
-            onStopped?.invoke()
         }
-        logger("service started")
+        logger("service stopped")
+        onStopped?.invoke()
     }
+
 
     fun stop() {
         serverSocket.close()
@@ -152,7 +157,7 @@ class Socks5Service(val config: Config, val logger: (String) -> Unit) {
             val job1 = scope.launch { handleStreamOneSide(clientSocket, targetSocket, aliveChannel) }
             val job2 = scope.launch { handleStreamOneSide(targetSocket, clientSocket, aliveChannel) }
             while (job1.isActive || job2.isActive) {
-                if (withTimeoutOrNull(maxIdleTimeout) { aliveChannel.receive() } == null) {
+                if (withTimeoutOrNull(config.maxIdleTimeout) { aliveChannel.receive() } == null) {
                     logger("$remoteAddress connection timeout")
                     break
                 }
@@ -230,7 +235,7 @@ class Socks5Service(val config: Config, val logger: (String) -> Unit) {
             }
         } catch (e: Exception) {
             when (e) {
-                is java.net.SocketException if e.message == "Socket closed" -> return
+                is java.net.SocketException if e.message == "Socket closed" -> {}
                 else -> logger(e.stackTraceToString())
             }
         }
@@ -238,7 +243,7 @@ class Socks5Service(val config: Config, val logger: (String) -> Unit) {
             to.shutdownOutput()
         } catch (e: Exception) {
             when (e) {
-                is java.net.SocketException if e.message == "Socket closed" -> return
+                is java.net.SocketException if e.message == "Socket closed" -> {}
                 else -> logger(e.stackTraceToString())
             }
         }

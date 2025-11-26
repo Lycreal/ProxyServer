@@ -33,7 +33,7 @@ class MainActivity : ComponentActivity() {
         val portNumberPicker = findViewById<android.widget.NumberPicker>(R.id.portNumberPicker)
         portNumberPicker.minValue = 1
         portNumberPicker.maxValue = 65535
-        portNumberPicker.value = 9000
+        portNumberPicker.value = config.listenPort
 
         portNumberPicker.setOnValueChangedListener { _, _, newVal ->
             config.listenPort = newVal
@@ -42,7 +42,7 @@ class MainActivity : ComponentActivity() {
 
     private fun initSocketNameEditText() {
         val socketNameEditText = findViewById<android.widget.EditText>(R.id.socketNameEditText)
-        socketNameEditText.setText("ProxyServer")
+        socketNameEditText.setText(config.listenUnixSocket)
 
         socketNameEditText.doOnTextChanged { s, _, _, _ ->
             config.listenUnixSocket = s.toString()
@@ -51,28 +51,36 @@ class MainActivity : ComponentActivity() {
 
     private fun initStartButton() {
         val startButton = findViewById<android.widget.Button>(R.id.startButton)
-        startButton.setOnClickListener {
-            // Handle start button click
-            val logTextView = findViewById<TextView>(R.id.logTextView)
-            service = Socks5Service(config) {
-                runOnUiThread {
-                    val timeString = ZonedDateTime.now().format(
-                        java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
-                    )
-                    logTextView.text = "[${timeString}] $it\n${logTextView.text}".take(65535)
-                }
-            }
+        val logTextView = findViewById<TextView>(R.id.logTextView)
 
-            service!!.onStopped = {
-                // set all inputs to enabled
-                runOnUiThread {
-                    findViewById<android.widget.Spinner>(R.id.listenTypeSpinner).isEnabled = true
-                    findViewById<android.widget.NumberPicker>(R.id.portNumberPicker).isEnabled = true
-                    findViewById<android.widget.EditText>(R.id.socketNameEditText).isEnabled = true
-                    startButton.isEnabled = true
-                    findViewById<android.widget.Button>(R.id.stopButton).isEnabled = false
+        startButton.setOnClickListener {
+            service = Socks5Service(config).apply {
+                onStarted = {
+                    runOnUiThread {
+                        findViewById<android.widget.Spinner>(R.id.listenTypeSpinner).isEnabled = false
+                        findViewById<android.widget.NumberPicker>(R.id.portNumberPicker).isEnabled = false
+                        findViewById<android.widget.EditText>(R.id.socketNameEditText).isEnabled = false
+                        startButton.isEnabled = false
+                        findViewById<android.widget.Button>(R.id.stopButton).isEnabled = true
+                    }
                 }
-                service = null
+                onStopped = {
+                    runOnUiThread {
+                        findViewById<android.widget.Spinner>(R.id.listenTypeSpinner).isEnabled = true
+                        findViewById<android.widget.NumberPicker>(R.id.portNumberPicker).isEnabled = true
+                        findViewById<android.widget.EditText>(R.id.socketNameEditText).isEnabled = true
+                        startButton.isEnabled = true
+                        findViewById<android.widget.Button>(R.id.stopButton).isEnabled = false
+                    }
+                }
+                logger = {
+                    runOnUiThread {
+                        val timeString = ZonedDateTime.now().format(
+                            java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+                        )
+                        logTextView.text = "[${timeString}] $it\n${logTextView.text}".take(65535)
+                    }
+                }
             }
 
             try {
@@ -82,14 +90,6 @@ class MainActivity : ComponentActivity() {
                 service = null
                 return@setOnClickListener
             }
-
-            // set all inputs to disabled
-            findViewById<android.widget.Spinner>(R.id.listenTypeSpinner).isEnabled = false
-            findViewById<android.widget.NumberPicker>(R.id.portNumberPicker).isEnabled = false
-            findViewById<android.widget.EditText>(R.id.socketNameEditText).isEnabled = false
-            startButton.isEnabled = false
-
-            findViewById<android.widget.Button>(R.id.stopButton).isEnabled = true
         }
     }
 
@@ -102,12 +102,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun initListenTypeSpinner() {
-        val choices = arrayOf("port", "unix socket")
-
         val listenTypeSpinner = findViewById<android.widget.Spinner>(R.id.listenTypeSpinner)
         val portNumberPicker = findViewById<android.widget.NumberPicker>(R.id.portNumberPicker)
         val socketNameEditText = findViewById<android.widget.EditText>(R.id.socketNameEditText)
-
+        val choices = arrayOf("port", "unix socket")
         listenTypeSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, choices).apply {
             this.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
         }
