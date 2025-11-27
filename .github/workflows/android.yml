@@ -19,4 +19,8 @@ jobs:
         java-version: '21'
         cache: 'gradle'
     - run: chmod +x ./gradlew
-    - run: ./gradlew build --no-daemon
+    - run: ./gradlew assembleRelease
+    - uses: actions/upload-artifact@v4
+      with:
+        name: apk
+        path: ./app/build/outputs/apk/release/app-release.apk
