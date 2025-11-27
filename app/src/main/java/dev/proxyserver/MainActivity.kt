@@ -4,19 +4,19 @@ import android.annotation.SuppressLint
 import android.os.Bundle
 import android.widget.ArrayAdapter
 import android.widget.TextView
-import androidx.activity.ComponentActivity
+import androidx.appcompat.app.AppCompatActivity
 import androidx.core.widget.doOnTextChanged
 import java.time.ZonedDateTime
 
 
 @SuppressLint("SetTextI18n")
-class MainActivity : ComponentActivity() {
+class MainActivity : AppCompatActivity() {
     val config: Config = Config(
         listenType = "port",
         listenPort = 9000,
         listenUnixSocket = "ProxyServer",
     )
-    var service: Socks5Server? = null
+    lateinit var service: Socks5Server
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -26,6 +26,39 @@ class MainActivity : ComponentActivity() {
         initSocketNameEditText()
         initStartButton()
         initStopButton()
+    }
+
+    private fun initService() {
+        service = Socks5Server(config).apply {
+            onStarted = {
+                runOnUiThread {
+                    findViewById<android.widget.Spinner>(R.id.listenTypeSpinner).isEnabled = false
+                    findViewById<android.widget.NumberPicker>(R.id.portNumberPicker).isEnabled = false
+                    findViewById<android.widget.EditText>(R.id.socketNameEditText).isEnabled = false
+                    findViewById<android.widget.Button>(R.id.startButton).isEnabled = false
+                    findViewById<android.widget.Button>(R.id.stopButton).isEnabled = true
+                }
+            }
+            onStopped = {
+                runOnUiThread {
+                    findViewById<android.widget.Spinner>(R.id.listenTypeSpinner).isEnabled = true
+                    findViewById<android.widget.NumberPicker>(R.id.portNumberPicker).isEnabled = true
+                    findViewById<android.widget.EditText>(R.id.socketNameEditText).isEnabled = true
+                    findViewById<android.widget.Button>(R.id.startButton).isEnabled = true
+                    findViewById<android.widget.Button>(R.id.stopButton).isEnabled = false
+                }
+            }
+            logger = { text ->
+                runOnUiThread {
+                    val timeString = ZonedDateTime.now().format(
+                        java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+                    )
+                    findViewById<TextView>(R.id.logTextView).let {
+                        it.text = "[${timeString}] $text\n${it.text}".take(65535)
+                    }
+                }
+            }
+        }
     }
 
     private fun initPortNumberPicker() {
@@ -53,40 +86,13 @@ class MainActivity : ComponentActivity() {
         val logTextView = findViewById<TextView>(R.id.logTextView)
 
         startButton.setOnClickListener {
-            service = Socks5Server(config).apply {
-                onStarted = {
-                    runOnUiThread {
-                        findViewById<android.widget.Spinner>(R.id.listenTypeSpinner).isEnabled = false
-                        findViewById<android.widget.NumberPicker>(R.id.portNumberPicker).isEnabled = false
-                        findViewById<android.widget.EditText>(R.id.socketNameEditText).isEnabled = false
-                        startButton.isEnabled = false
-                        findViewById<android.widget.Button>(R.id.stopButton).isEnabled = true
-                    }
-                }
-                onStopped = {
-                    runOnUiThread {
-                        findViewById<android.widget.Spinner>(R.id.listenTypeSpinner).isEnabled = true
-                        findViewById<android.widget.NumberPicker>(R.id.portNumberPicker).isEnabled = true
-                        findViewById<android.widget.EditText>(R.id.socketNameEditText).isEnabled = true
-                        startButton.isEnabled = true
-                        findViewById<android.widget.Button>(R.id.stopButton).isEnabled = false
-                    }
-                }
-                logger = {
-                    runOnUiThread {
-                        val timeString = ZonedDateTime.now().format(
-                            java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
-                        )
-                        logTextView.text = "[${timeString}] $it\n${logTextView.text}".take(65535)
-                    }
-                }
-            }
-
             try {
-                service!!.start()
+                if (!::service.isInitialized) {
+                    initService()
+                }
+                service.start()
             } catch (e: Exception) {
                 logTextView.text = "[ERROR] ${e.message}\n${logTextView.text}".take(65535)
-                service = null
                 return@setOnClickListener
             }
         }
@@ -96,7 +102,7 @@ class MainActivity : ComponentActivity() {
         val stopButton = findViewById<android.widget.Button>(R.id.stopButton)
 
         stopButton.setOnClickListener {
-            service?.stop()
+            service.stop()
         }
     }
 
