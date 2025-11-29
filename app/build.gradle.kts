@@ -13,7 +13,7 @@ android {
     compileSdk = 36
 
     signingConfigs {
-        if (keystorePropertiesFile.exists() && false) {
+        if (keystorePropertiesFile.exists()) {
             val keystoreProperties = Properties()
             keystoreProperties.load(FileInputStream(keystorePropertiesFile))
             create("release") {
