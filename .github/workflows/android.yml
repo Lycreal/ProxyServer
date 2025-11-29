@@ -21,7 +21,7 @@ jobs:
           cache: 'gradle'
 
       - name: Decode Keystore
-        run: echo $ENCODED_STRING | base64 -di > ./keystore.jks
+        run: echo $ENCODED_STRING | base64 -di > app/keystore.jks
         env:
           ENCODED_STRING: ${{ secrets.KEY_STORE_BASE64 }}
 
